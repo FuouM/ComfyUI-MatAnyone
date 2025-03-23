@@ -1,19 +1,18 @@
+from pathlib import Path
+
 import numpy as np
-from omegaconf import OmegaConf
 import torch
-from .src.core.inference_core import InferenceCore
+from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from .src.model.matanyone import MatAnyone
-from pathlib import Path
 from comfy.utils import ProgressBar
 
-bgr = (np.array([120, 255, 155], dtype=np.float32) / 255).reshape((1, 1, 3))
-# green screen to paste fgr
+from .src.core.inference_core import InferenceCore
+from .src.model.matanyone import MatAnyone
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 base_dir = Path(__file__).resolve().parent
-
 cfg = OmegaConf.load(f"{base_dir}/src/base.yaml")
 
 
@@ -38,49 +37,60 @@ class MatAnyoneCfg:
         """Number of warmup iterations for the first frame alpha prediction."""
 
 
+def get_repeat(vframes, index: int, n_warmup: int):
+    return vframes[index].unsqueeze(0).repeat(n_warmup, 1, 1, 1)
+
+
+def preprocess_mask(mask):
+    return mask * 255.0
+
+
 def inference_matanyone(
     vframes: torch.Tensor,
     mask: torch.Tensor,
     processor: InferenceCore,
     n_warmup=10,
 ):
-    length = vframes.shape[0]
-    objects = [1]
+    mask = mask * 255.0  # from 0..1 to 0..255
 
     # repeat the first frame for warmup
-    repeated_frames = vframes[0].unsqueeze(0).repeat(n_warmup, 1, 1, 1)
-    vframes = torch.cat([repeated_frames, vframes], dim=0).float()
-    length += n_warmup  # update length
+    repeated_frames = get_repeat(vframes, 0, n_warmup)
+    # vframes = torch.cat([repeated_frames, vframes], dim=0).float()
+    # length += n_warmup  # update length
+
+    vframes = vframes[1:].to(device)
+    length = vframes.shape[0]
 
     mask = mask.to(device)
-    vframes = vframes.to(device)
-    mask = mask * 255.0
+    repeated_frames = repeated_frames.to(device)
 
     # inference start
     phas = []
     pbar = ProgressBar(length)
-    for ti in tqdm(range(length), desc="Process frames"):
-        image = vframes[ti]
 
+    for ti in tqdm(range(n_warmup), desc="Warming up"):
+        image = repeated_frames[ti]
         if ti == 0:
             # encode given mask
-            output_prob = processor.step(image, mask, objects=objects)
+            output_prob = processor.step(image, mask, objects=[1])
             # first frame for prediction
             output_prob = processor.step(image, first_frame_pred=True)
         else:
-            if ti <= n_warmup:
-                # reinit as the first frame for prediction
-                output_prob = processor.step(image, first_frame_pred=True)
-            else:
-                output_prob = processor.step(image)
+            # reinit as the first frame for prediction
+            output_prob = processor.step(image, first_frame_pred=True)
 
+    # convert output probabilities to alpha matte
+    # Get the last warm up frame
+    mask = processor.output_prob_to_mask(output_prob)
+    phas.append((mask).unsqueeze(0))
+
+    # Process actual frames
+    for ti in tqdm(range(length), desc="Process frames"):
+        image = vframes[ti]
+        output_prob = processor.step(image)
         # convert output probabilities to alpha matte
         mask = processor.output_prob_to_mask(output_prob)
-
-        # DONOT save the warmup frame
-        if ti > (n_warmup - 1):
-            phas.append((mask).unsqueeze(0))
-
+        phas.append((mask).unsqueeze(0))
         pbar.update_absolute(ti, length)
 
     return phas

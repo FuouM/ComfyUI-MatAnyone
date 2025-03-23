@@ -10,9 +10,13 @@ from pathlib import Path
 base_dir = Path(__file__).resolve().parent
 import torch
 
-from .src.core.inference_core import InferenceCore
-from .mat_anyone import get_matanyone_model, inference_matanyone
+# inference_matanyone_extended,
 from .constants import ckpt_path
+from .mat_anyone import (
+    get_matanyone_model,
+    inference_matanyone,
+)
+from .src.core.inference_core import InferenceCore
 
 
 def img_to_mask(tensor: torch.Tensor):
@@ -30,18 +34,14 @@ class MatAnyoneVideo:
                 "src_video": ("IMAGE",),
                 "n_warmup": (
                     "INT",
-                    {"default": 10, "min": 0, "step": 1},
+                    {"default": 10, "min": 1, "step": 1},
                 ),
             },
             "optional": {"foreground_mask": ("IMAGE",), "foreground_MASK": ("MASK",)},
         }
 
-    RETURN_TYPES = (
-        "IMAGE",
-    )
-    RETURN_NAMES = (
-        "matte",
-    )
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("matte",)
     FUNCTION = "todo"
     CATEGORY = "MatAnyone"
 
