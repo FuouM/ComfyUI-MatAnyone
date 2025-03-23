@@ -32,6 +32,10 @@ class MatAnyoneVideo:
         return {
             "required": {
                 "src_video": ("IMAGE",),
+                "mask_frame": (
+                    "INT",
+                    {"default": 0, "min": 0, "step": 1},
+                ),
                 "n_warmup": (
                     "INT",
                     {"default": 10, "min": 1, "step": 1},
@@ -48,24 +52,33 @@ class MatAnyoneVideo:
     def todo(
         self,
         src_video: torch.Tensor,
+        mask_frame: int,
         n_warmup: int,
         foreground_mask: torch.Tensor | None = None,
         foreground_MASK: torch.Tensor | None = None,
     ):
-        if foreground_mask is None and foreground_MASK is None:
-            raise ValueError("Please provide one mask image")
-
-        if foreground_MASK is not None:
-            mask = foreground_MASK.squeeze()
-        else:
-            mask = img_to_mask(foreground_mask.permute(0, 3, 1, 2)).squeeze()
+        mask = get_mask(foreground_mask, foreground_MASK)
         src_video = src_video.permute(0, 3, 1, 2)  # T CHW RGB
 
         # load MatAnyone model
         matanyone = get_matanyone_model(f"{base_dir}/{ckpt_path}")
         processor = InferenceCore(matanyone, cfg=matanyone.cfg)
-        phas = inference_matanyone(src_video, mask, processor, n_warmup)
+        phas = inference_matanyone(src_video, mask, processor, mask_frame, n_warmup)
         out_mask = torch.cat(phas).unsqueeze(1).permute(0, 2, 3, 1)
         out_mask_rgb = out_mask.repeat(1, 1, 1, 3)  # Repeat the last dimension 3 times
 
         return (out_mask_rgb,)
+
+
+def get_mask(
+    foreground_mask: torch.Tensor | None = None,
+    foreground_MASK: torch.Tensor | None = None,
+):
+    if foreground_mask is None and foreground_MASK is None:
+        raise ValueError("Please provide one mask image")
+
+    if foreground_MASK is not None:
+        mask = foreground_MASK.squeeze()
+    else:
+        mask = img_to_mask(foreground_mask.permute(0, 3, 1, 2)).squeeze()
+    return mask

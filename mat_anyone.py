@@ -37,37 +37,14 @@ class MatAnyoneCfg:
         """Number of warmup iterations for the first frame alpha prediction."""
 
 
-def get_repeat(vframes, index: int, n_warmup: int):
+def get_repeat(vframes: torch.Tensor, index: int, n_warmup: int):
     return vframes[index].unsqueeze(0).repeat(n_warmup, 1, 1, 1)
 
 
 def preprocess_mask(mask):
     return mask * 255.0
 
-
-def inference_matanyone(
-    vframes: torch.Tensor,
-    mask: torch.Tensor,
-    processor: InferenceCore,
-    n_warmup=10,
-):
-    mask = mask * 255.0  # from 0..1 to 0..255
-
-    # repeat the first frame for warmup
-    repeated_frames = get_repeat(vframes, 0, n_warmup)
-    # vframes = torch.cat([repeated_frames, vframes], dim=0).float()
-    # length += n_warmup  # update length
-
-    vframes = vframes[1:].to(device)
-    length = vframes.shape[0]
-
-    mask = mask.to(device)
-    repeated_frames = repeated_frames.to(device)
-
-    # inference start
-    phas = []
-    pbar = ProgressBar(length)
-
+def warming_up(mask, processor, n_warmup, repeated_frames):
     for ti in tqdm(range(n_warmup), desc="Warming up"):
         image = repeated_frames[ti]
         if ti == 0:
@@ -78,19 +55,121 @@ def inference_matanyone(
         else:
             # reinit as the first frame for prediction
             output_prob = processor.step(image, first_frame_pred=True)
+    return output_prob
 
-    # convert output probabilities to alpha matte
-    # Get the last warm up frame
-    mask = processor.output_prob_to_mask(output_prob)
-    phas.append((mask).unsqueeze(0))
 
-    # Process actual frames
-    for ti in tqdm(range(length), desc="Process frames"):
-        image = vframes[ti]
-        output_prob = processor.step(image)
-        # convert output probabilities to alpha matte
-        mask = processor.output_prob_to_mask(output_prob)
-        phas.append((mask).unsqueeze(0))
-        pbar.update_absolute(ti, length)
+# def inference_matanyone(
+#     vframes: torch.Tensor,
+#     mask: torch.Tensor,
+#     processor: InferenceCore,
+#     n_warmup=10,
+# ):
+#     mask = preprocess_mask(mask)  # from 0..1 to 0..255
+
+#     # repeat the first frame for warmup
+#     repeated_frames = get_repeat(vframes, 0, n_warmup)
+
+#     vframes = vframes[1:].to(device)
+#     length = vframes.shape[0]
+
+#     mask = mask.to(device)
+#     repeated_frames = repeated_frames.to(device)
+
+#     # inference start
+#     phas = []
+#     output_prob = warming_up(mask, processor, n_warmup, repeated_frames)
+
+#     # convert output probabilities to alpha matte
+#     # Get the last warm up frame
+#     mask = processor.output_prob_to_mask(output_prob)
+#     phas.append((mask).unsqueeze(0))
+
+#     # Process actual frames
+#     pbar = ProgressBar(length)
+#     for ti in tqdm(range(length), desc="Process frames"):
+#         image = vframes[ti]
+#         output_prob = processor.step(image)
+#         # convert output probabilities to alpha matte
+#         mask = processor.output_prob_to_mask(output_prob)
+#         phas.append((mask).unsqueeze(0))
+#         pbar.update_absolute(ti, length)
+
+#     return phas
+
+def inference_matanyone(
+    vframes: torch.Tensor,
+    mask: torch.Tensor,
+    processor: InferenceCore,
+    frame_index: int=0,
+    n_warmup=10,
+):
+    mask = preprocess_mask(mask)
+    vframes = vframes.to(device)
+    mask = mask.to(device)
+    length = vframes.shape[0]
+    phas = [None] * length # initialize output list
+
+    if frame_index == 0:
+        # Case 1: frame_index == 0 (original behavior)
+        repeated_frames = get_repeat(vframes, 0, n_warmup)
+        repeated_frames = repeated_frames.to(device)
+
+        output_prob = warming_up(mask, processor, n_warmup, repeated_frames)
+        phas[0] = processor.output_prob_to_mask(output_prob).unsqueeze(0)
+
+        pbar = ProgressBar(length - 1)
+        for ti in tqdm(range(1, length), desc="Forward Propagation"):
+            image = vframes[ti]
+            output_prob = processor.step(image)
+            phas[ti] = processor.output_prob_to_mask(output_prob).unsqueeze(0)
+            pbar.update_absolute(ti - 1, length - 1)
+
+
+    elif frame_index == length - 1:
+        # Case 2: frame_index == last frame (reverse propagation)
+        reversed_vframes = torch.flip(vframes, dims=[0])
+        repeated_frames = get_repeat(reversed_vframes, 0, n_warmup) # repeat the last frame
+        repeated_frames = repeated_frames.to(device)
+        reversed_mask = mask # mask for the last frame
+
+        output_prob = warming_up(reversed_mask, processor, n_warmup, repeated_frames)
+        phas[frame_index] = processor.output_prob_to_mask(output_prob).unsqueeze(0)
+
+        pbar = ProgressBar(length - 1)
+        for ti in tqdm(range(1, length), desc="Backward Propagation"):
+            image = reversed_vframes[ti]
+            output_prob = processor.step(image)
+            phas[length - 1 - ti] = processor.output_prob_to_mask(output_prob).unsqueeze(0) # reverse index
+            pbar.update_absolute(ti - 1, length - 1)
+
+
+    elif 0 < frame_index < length - 1:
+        # Case 3: 0 < frame_index < last frame (forward and backward)
+        repeated_frames = get_repeat(vframes, frame_index, n_warmup) # repeat the frame_index frame
+        repeated_frames = repeated_frames.to(device)
+
+        # Warm up at frame_index
+        output_prob = warming_up(mask, processor, n_warmup, repeated_frames)
+        phas[frame_index] = processor.output_prob_to_mask(output_prob).unsqueeze(0)
+
+
+        # Forward Propagation (from frame_index + 1 to end)
+        pbar_forward = ProgressBar(length - 1 - frame_index)
+        for ti in tqdm(range(frame_index + 1, length), desc="Forward Propagation"):
+            image = vframes[ti]
+            output_prob = processor.step(image)
+            phas[ti] = processor.output_prob_to_mask(output_prob).unsqueeze(0)
+            pbar_forward.update_absolute(ti - (frame_index + 1) , length - 1 - frame_index)
+
+
+        # Backward Propagation (from frame_index - 1 to start)
+        reversed_vframes_backward = torch.flip(vframes[:frame_index], dims=[0]) # frames before frame_index, reversed
+        pbar_backward = ProgressBar(frame_index)
+        for ti in tqdm(range(frame_index), desc="Backward Propagation"):
+            image = reversed_vframes_backward[ti]
+            output_prob = processor.step(image)
+            phas[frame_index - 1 - ti] = processor.output_prob_to_mask(output_prob).unsqueeze(0) # reverse index
+            pbar_backward.update_absolute(ti, frame_index)
+
 
     return phas
