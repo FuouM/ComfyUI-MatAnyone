@@ -94,11 +94,10 @@ class SensoryUpdater_fullscale(nn.Module):
             + self.g1_conv(downsample_groups(g[4], ratio=1 / 16))
         )
 
-        with torch.cuda.amp.autocast(enabled=False):
-            g = g.float()
-            h = h.float()
-            values = self.transform(torch.cat([g, h], dim=2))
-            new_h = _recurrent_update(h, values)
+        g = g.float()
+        h = h.float()
+        values = self.transform(torch.cat([g, h], dim=2))
+        new_h = _recurrent_update(h, values)
 
         return new_h
 
@@ -124,11 +123,10 @@ class SensoryUpdater(nn.Module):
             + self.g4_conv(downsample_groups(g[2], ratio=1 / 4))
         )
 
-        with torch.cuda.amp.autocast(enabled=False):
-            g = g.float()
-            h = h.float()
-            values = self.transform(torch.cat([g, h], dim=2))
-            new_h = _recurrent_update(h, values)
+        g = g.float()
+        h = h.float()
+        values = self.transform(torch.cat([g, h], dim=2))
+        new_h = _recurrent_update(h, values)
 
         return new_h
 
@@ -143,11 +141,10 @@ class SensoryDeepUpdater(nn.Module):
         nn.init.xavier_normal_(self.transform.weight)
 
     def forward(self, g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-        with torch.cuda.amp.autocast(enabled=False):
-            g = g.float()
-            h = h.float()
-            values = self.transform(torch.cat([g, h], dim=2))
-            new_h = _recurrent_update(h, values)
+        g = g.float()
+        h = h.float()
+        values = self.transform(torch.cat([g, h], dim=2))
+        new_h = _recurrent_update(h, values)
 
         return new_h
 

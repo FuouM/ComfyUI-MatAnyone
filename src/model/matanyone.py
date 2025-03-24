@@ -161,33 +161,32 @@ class MatAnyone(nn.Module):
         uncert_mask = uncert_output["mask"] if uncert_output is not None else None
 
         # read using visual attention
-        with torch.cuda.amp.autocast(enabled=False):
-            affinity = get_affinity(
-                memory_key.float(),
-                memory_shrinkage.float(),
-                query_key.float(),
-                query_selection.float(),
-                uncert_mask=uncert_mask,
-            )
+        affinity = get_affinity(
+            memory_key.float(),
+            memory_shrinkage.float(),
+            query_key.float(),
+            query_selection.float(),
+            uncert_mask=uncert_mask,
+        )
 
-            msk_value = msk_value.flatten(start_dim=1, end_dim=2).float()
+        msk_value = msk_value.flatten(start_dim=1, end_dim=2).float()
 
-            # B * (num_objects*CV) * H * W
-            pixel_readout = readout(affinity, msk_value, uncert_mask)
-            pixel_readout = pixel_readout.view(
-                batch_size, num_objects, self.value_dim, *pixel_readout.shape[-2:]
-            )
+        # B * (num_objects*CV) * H * W
+        pixel_readout = readout(affinity, msk_value, uncert_mask)
+        pixel_readout = pixel_readout.view(
+            batch_size, num_objects, self.value_dim, *pixel_readout.shape[-2:]
+        )
 
-            uncert_output = self.pred_uncertainty(
-                last_pix_feat,
-                pix_feat,
-                last_pred_mask,
-                pixel_readout[:, 0] - msk_value[:, :, -1],
-            )
-            uncert_prob = uncert_output["prob"].unsqueeze(1)  # b n 1 h w
-            pixel_readout = pixel_readout * uncert_prob + msk_value[:, :, -1].unsqueeze(
-                1
-            ) * (1 - uncert_prob)
+        uncert_output = self.pred_uncertainty(
+            last_pix_feat,
+            pix_feat,
+            last_pred_mask,
+            pixel_readout[:, 0] - msk_value[:, :, -1],
+        )
+        uncert_prob = uncert_output["prob"].unsqueeze(1)  # b n 1 h w
+        pixel_readout = pixel_readout * uncert_prob + msk_value[:, :, -1].unsqueeze(
+            1
+        ) * (1 - uncert_prob)
 
         pixel_readout = self.pixel_fusion(pix_feat, pixel_readout, sensory, last_mask)
 
