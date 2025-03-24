@@ -1,6 +1,6 @@
 # ComfyUI-MatAnyone
 
-MatAnyone in ComfyUI
+MatAnyone in ComfyUI (Remove background)
 
 Stable Video Matting with Consistent Memory Propagation: <https://github.com/pq-yang/MatAnyone>
 
