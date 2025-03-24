@@ -2,7 +2,6 @@ from typing import Iterable, List, Optional
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from .image_feature_store import ImageFeatureStore
 from .memory_manager import MemoryManager
 from .object_manager import ObjectManager
@@ -153,10 +152,7 @@ class InferenceCore:
         Returns: (num_objects+1)*H*W normalized probability; the first channel is the background
         """
         bs = key.shape[0]
-        if self.flip_aug:
-            assert bs == 2
-        else:
-            assert bs == 1
+        assert bs == 1
 
         if not self.memory.engaged:
             print("Trying to segment without any memory!")
@@ -199,13 +195,7 @@ class InferenceCore:
             update_sensory=update_sensory,
         )
         # remove batch dim
-        if self.flip_aug:
-            # average predictions of the non-flipped and flipped version
-            pred_prob_with_bg = (
-                pred_prob_with_bg[0] + torch.flip(pred_prob_with_bg[1], dims=[-1])
-            ) / 2
-        else:
-            pred_prob_with_bg = pred_prob_with_bg[0]
+        pred_prob_with_bg = pred_prob_with_bg[0]
         if update_sensory:
             self.memory.update_sensory(sensory, self.object_manager.all_obj_ids)
         return pred_prob_with_bg
@@ -230,7 +220,6 @@ class InferenceCore:
         mask: Optional[torch.Tensor] = None,
         objects: Optional[List[int]] = None,
         *,
-        idx_mask: bool = False,
         end: bool = False,
         delete_buffer: bool = True,
         force_permanent: bool = False,
@@ -259,50 +248,12 @@ class InferenceCore:
         force_permanent: the memory recorded this frame will be added to the permanent memory
         """
         if objects is None and mask is not None:
-            assert not idx_mask
             objects = list(range(1, mask.shape[0] + 1))
-
-        # resize input if needed -- currently only used for the GUI
-        resize_needed = False
-        if self.max_internal_size > 0:
-            h, w = image.shape[-2:]
-            min_side = min(h, w)
-            if min_side > self.max_internal_size:
-                resize_needed = True
-                new_h = int(h / min_side * self.max_internal_size)
-                new_w = int(w / min_side * self.max_internal_size)
-                image = F.interpolate(
-                    image.unsqueeze(0),
-                    size=(new_h, new_w),
-                    mode="bilinear",
-                    align_corners=False,
-                )[0]
-                if mask is not None:
-                    if idx_mask:
-                        mask = (
-                            F.interpolate(
-                                mask.unsqueeze(0).unsqueeze(0).float(),
-                                size=(new_h, new_w),
-                                mode="nearest-exact",
-                                align_corners=False,
-                            )[0, 0]
-                            .round()
-                            .long()
-                        )
-                    else:
-                        mask = F.interpolate(
-                            mask.unsqueeze(0),
-                            size=(new_h, new_w),
-                            mode="bilinear",
-                            align_corners=False,
-                        )[0]
 
         self.curr_ti += 1
 
         image, self.pad = pad_divide_by(image, 16)  # DONE alreay for 3DCNN!!
         image = image.unsqueeze(0)  # add the batch dimension
-        if self.flip_aug:
-            image = torch.cat([image, torch.flip(image, dims=[-1])], dim=0)
 
         # whether to update the working memory
         is_mem_frame = (
@@ -348,17 +299,11 @@ class InferenceCore:
                 # merge predicted mask with the incomplete input mask
                 pred_prob_no_bg = pred_prob_with_bg[1:]
                 # use the mutual exclusivity of segmentation
-                if idx_mask:
-                    pred_prob_no_bg[:, mask > 0] = 0
-                else:
-                    pred_prob_no_bg[:, mask.max(0) > 0.5] = 0
+                pred_prob_no_bg[:, mask.max(0) > 0.5] = 0
 
                 new_masks = []
                 for mask_id, tmp_id in enumerate(corresponding_tmp_ids):
-                    if idx_mask:
-                        this_mask = (mask == objects[mask_id]).type_as(pred_prob_no_bg)
-                    else:
-                        this_mask = mask[tmp_id]
+                    this_mask = mask[tmp_id]
                     if tmp_id > pred_prob_no_bg.shape[0]:
                         new_masks.append(this_mask.unsqueeze(0))
                     else:
@@ -366,24 +311,6 @@ class InferenceCore:
                         pred_prob_no_bg[tmp_id - 1] = this_mask
                 # new_masks are always in the order of tmp_id
                 mask = torch.cat([pred_prob_no_bg, *new_masks], dim=0)
-            elif idx_mask:
-                # simply convert cls to one-hot representation
-                if len(objects) == 0:
-                    if delete_buffer:
-                        self.image_feature_store.delete(self.curr_ti)
-                    print("Trying to insert an empty mask as memory!")
-                    return torch.zeros(
-                        (1, key.shape[-2] * 16, key.shape[-1] * 16),
-                        device=key.device,
-                        dtype=key.dtype,
-                    )
-                mask = torch.stack(
-                    [
-                        mask == objects[mask_id]
-                        for mask_id, _ in enumerate(corresponding_tmp_ids)
-                    ],
-                    dim=0,
-                )
             if matting:
                 mask = mask.unsqueeze(0).float() / 255.0
                 pred_prob_with_bg = torch.cat([1 - mask, mask], 0)
@@ -392,10 +319,6 @@ class InferenceCore:
                 pred_prob_with_bg = torch.softmax(pred_prob_with_bg, dim=0)
 
         self.last_mask = pred_prob_with_bg[1:].unsqueeze(0)
-        if self.flip_aug:
-            self.last_mask = torch.cat(
-                [self.last_mask, torch.flip(self.last_mask, dims=[-1])], dim=0
-            )
         self.last_pix_feat = pix_feat
 
         # save as memory if needed
@@ -429,14 +352,6 @@ class InferenceCore:
             self.image_feature_store.delete(self.curr_ti)
 
         output_prob = unpad(pred_prob_with_bg, self.pad)
-        if resize_needed:
-            # restore output to the original size
-            output_prob = F.interpolate(
-                output_prob.unsqueeze(0),
-                size=(h, w),
-                mode="bilinear",
-                align_corners=False,
-            )[0]
 
         return output_prob
 
