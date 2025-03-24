@@ -1,0 +1,15 @@
+[project]
+name = "matanyone"
+description = "MatAnyone in ComfyUI (Remove background)"
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["torch", "omegaconf"]
+
+[project.urls]
+Repository = "https://github.com/FuouM/ComfyUI-MatAnyone"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "fuoumarinas"
+DisplayName = "ComfyUI-MatAnyone"
+Icon = ""
